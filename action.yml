@@ -1,0 +1,77 @@
+name: "Setup Valkey"
+description: "Starts a Valkey instance on Ubuntu (via apt) or macOS (via Homebrew)"
+branding:
+  icon: "database"
+  color: "red"
+
+inputs:
+  port:
+    description: "Port to run Valkey on"
+    required: false
+    default: "6379"
+outputs:
+  connection-uri:
+    description: The connection URI to connect to Valkey.
+    value: ${{ steps.set-outputs.outputs.connection-uri }}
+runs:
+  using: "composite"
+  steps:
+    # --- Ubuntu (Linux) ---
+    - name: Install and Start Valkey (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt update -qq
+        sudo apt install --no-install-recommends -y valkey
+        sudo valkey-server /etc/valkey/valkey.conf --port "$INPUT_PORT" --daemonize yes
+      env:
+        INPUT_PORT: ${{ inputs.port }}
+
+    # --- macOS ---
+    - name: Install and Start Valkey via Homebrew (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        # HOMEBREW_GITHUB_ACTIONS is used to skip 'initdb' execution to save
+        # some seconds. That invocation is not needed because of initdb
+        # invocation below.
+        export HOMEBREW_GITHUB_ACTIONS=1
+        export HOMEBREW_NO_ENV_HINTS=1
+        export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+        export HOMEBREW_NO_INSTALL_CLEANUP=1
+        export HOMEBREW_NO_INSTALL_UPGRADE=1
+
+        brew install --quiet valkey
+
+        if [ "$INPUT_PORT" != "6379" ]; then
+          sed -i '' "s/^port 6379/port $INPUT_PORT/" $(brew --prefix)/etc/valkey.conf
+        fi
+        brew services start valkey
+      env:
+        INPUT_PORT: ${{ inputs.port }}
+
+    - name: Health Check
+      run: |
+        echo "Waiting for Valkey to be ready..."
+        for i in {1..10}; do
+          if valkey-cli -p $INPUT_PORT ping | grep -q "PONG"; then
+            echo "Valkey is ready on port $INPUT_PORT!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "Valkey failed to start"
+        exit 1
+      env:
+        INPUT_PORT: ${{ inputs.port }}
+      shell: bash
+
+    - name: Set action outputs
+      run: |
+        CONNECTION_URI="redis://default@localhost:$INPUT_PORT/0"
+
+        echo "connection-uri=$CONNECTION_URI" >> $GITHUB_OUTPUT
+      env:
+        INPUT_PORT: ${{ inputs.port }}
+      shell: bash
+      id: set-outputs
